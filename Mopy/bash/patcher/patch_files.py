@@ -36,6 +36,7 @@ from ..bolt import Progress, SubProgress, deprint, dict_sort, readme_url, FName
 from ..exception import BoltError, CancelError, ModError
 from ..plugin_types import MergeabilityCheck
 from ..localize import format_date
+from ..brec import TopComplexGrup, TopGrup
 from ..mod_files import LoadFactory, ModFile
 
 class PatchFile(ModFile):
@@ -385,9 +386,9 @@ class PatchFile(ModFile):
             self.tes4.description += msg
 
     def split_patch(self) -> list[Self] | None:
-        """Split this patch to fit within the game's master limit. Must not be
-        called on BPs that contain a top group with more masters than the game
-        allows, otherwise a RuntimeError will be raised.
+        """Split this patch to fit within the game's master limit. Top groups
+        that exceed the limit on their own are split record by record (see
+        can_split_top), after which whole top groups are moved between parts.
 
         :return: A list of the created Bashed Patch files, or None if splitting
             was not possible."""
@@ -404,20 +405,36 @@ class PatchFile(ModFile):
                     selected=[latest_sel.fileInfo.fn_key],
                     author_str='BASHED PATCH')
             return self.__class__(new_part, self.p_file_minfos)
-        # Find the top groups with the highest number
         master_dict = self.used_masters_by_top()
         max_masters = bush.game.Esp.master_limit
-        if any(len(m) > max_masters for m in master_dict.values()):
-            # Let's be defensive here, the check is cheap and will prevent an
-            # endless loop down below if someone messes up
-            raise RuntimeError(f'Do not call split_patch on BPs with top '
-                               f'groups that have >{max_masters} masters!')
+        source_bp_file = latest_sel = self
+        all_bp_parts = [source_bp_file]
+        # First split any top groups that are too big on their own record by
+        # record. Only the first chunk stays in this file, every other chunk
+        # gets a part of its own
+        for t_sig, t_masters in master_dict.items():
+            if len(t_masters) <= max_masters:
+                continue
+            if (chunks := self._chunk_top(t_sig, max_masters)) is None:
+                return None
+            src_block = self.tops[t_sig]
+            for chunk in chunks[1:]:
+                latest_sel = part = new_bp_part()
+                all_bp_parts.append(part)
+                part.tops[t_sig] = part_block = type(src_block).empty_mob(
+                    src_block._load_f, t_sig)
+                for rid in chunk:
+                    part_block.setRecord(src_block.id_records.pop(rid),
+                                         do_copy=False)
+        if len(all_bp_parts) > 1:
+            if len(source_bp_file.used_masters()) <= max_masters:
+                return all_bp_parts
+            master_dict = self.used_masters_by_top()
+        # Find the top groups with the highest number
         largest_groups = deque(sorted(master_dict,
                     key=lambda k: len(master_dict[k]), reverse=True))
-        source_bp_file = self
-        latest_sel = source_bp_file
         latest_sel = target_bp_file = new_bp_part()
-        all_bp_parts = [source_bp_file, target_bp_file]
+        all_bp_parts.append(target_bp_file)
         while True:
             while True:
                 if not source_bp_file.tops:
@@ -446,6 +463,36 @@ class PatchFile(ModFile):
             latest_sel = target_bp_file = new_bp_part()
             all_bp_parts.append(target_bp_file)
         return all_bp_parts
+
+    def can_split_top(self, t_sig: bytes) -> bool:
+        """Return True if the specified top group can be split record by
+        record, i.e. it is a simple top group. CELL, WRLD and DIAL can't be,
+        since their children must stay in the same file as their parent."""
+        t_block = self.tops[t_sig]
+        return (isinstance(t_block, TopGrup) and
+                not isinstance(t_block, TopComplexGrup))
+
+    def _chunk_top(self, t_sig: bytes, max_masters: int) -> list[list] | None:
+        """Greedily partition the records of the specified top group into
+        chunks that each need at most max_masters masters. Return None if the
+        group can't be split, or a single record already needs too many."""
+        if not self.can_split_top(t_sig):
+            return None
+        chunks = []
+        chunk, chunk_masters = [], set()
+        for rid, record in self.tops[t_sig].id_records.items():
+            rec_masters = bolt.MasterSet([bush.game.master_file])
+            record.updateMasters(rec_masters.add)
+            if len(rec_masters) > max_masters:
+                return None
+            if len(new_masters := chunk_masters | rec_masters) > max_masters:
+                chunks.append(chunk)
+                chunk, new_masters = [], set(rec_masters)
+            chunk.append(rid)
+            chunk_masters = new_masters
+        if chunk:
+            chunks.append(chunk)
+        return chunks
 
     def find_unneded_parts(self, valid_parts: list[Self]) -> list[FName]:
         """Find a list of all ModInfo keys that belong to ModInfos which

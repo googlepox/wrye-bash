@@ -187,7 +187,9 @@ class PatchDialog(DialogWindow):
             all_bp_masters = set()
             mlimit = bush.game.Esp.master_limit
             for t_sig, t_masters in master_dict.items():
-                if len(t_masters) > mlimit:
+                # Simple top groups get split record by record in split_patch
+                if (len(t_masters) > mlimit and
+                        not patchFile.can_split_top(t_sig)):
                     fmt = {'max_num_masters': mlimit,
                            'curr_num_masters': len(t_masters),
                            'top_group_sig': bolt.sig_to_str(t_sig)}
