@@ -22,10 +22,10 @@
 # =============================================================================
 from os.path import join as _j
 
-from .. import WS_COMMON_FILES, GameInfo
+from .. import WS_COMMON_FILES, GameInfo, ObEslPluginFlag
 from ..patch_game import PatchGame
 from ..store_mixins import DiscMixin, GOGMixin, SteamMixin, WindowsStoreMixin
-from ... import bolt
+from ... import bass, bolt
 
 _GOG_IDS = [
     1458058109, # Game
@@ -1236,6 +1236,23 @@ class AOblivionGameInfo(PatchGame):
         header_type.pack_formats.update({x: u'=4sIi2I' for x in {2, 3}})
         header_type.pack_formats.update({x: u'=4sIhh2I' for x in {4, 5}})
         cls._import_records(__name__, _brec=_brec_)
+
+    # OBSE plugin that adds ESL support, see _init_plugin_types. None to
+    # disable detection (e.g. for games that can't load OBSE plugins)
+    esl_support_dll: str | None = 'OblivionESL.dll'
+    # The Bashed Patch can merge plugins in Oblivion - keep that when ESL
+    # support is enabled
+    keep_merge_check = True
+
+    def _init_plugin_types(self, pflags=None):
+        if not pflags and (dll := self.esl_support_dll):
+            from ... import env
+            dll_path = env.to_os_path(bass.dirs['mods'].join(
+                self.Se.plugin_dir, 'Plugins', dll))
+            if dll_path and dll_path.is_file():
+                # ESL-support plugin installed, enable ESL support in WB
+                pflags = ObEslPluginFlag
+        super()._init_plugin_types(pflags)
 
     @classmethod
     def _import_records(cls, package_name, plugin_form_vers=None, _brec=None):

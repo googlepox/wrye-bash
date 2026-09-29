@@ -210,6 +210,25 @@ class EslPluginFlag(_EslMixin, PluginFlag):
     ESL = ('esl_flag', '_is_esl', 'l', 4096,
            MergeabilityCheck.ESL_CHECK, 253)
 
+class ObEslPluginFlag(_EslMixin, PluginFlag):
+    """ESL flag for Oblivion, added by the OblivionESL OBSE plugin. There is no
+    .esl extension - the engine only loads .esp/.esm - so the header flag is
+    the only thing that makes a plugin light."""
+    # Same FormID layout as SSE: FExxxyyy with local IDs in 0x800-0xFFF
+    ESL = ('esl_flag', '_is_esl', 'l', 4096,
+           MergeabilityCheck.ESL_CHECK, 253)
+
+    @classmethod
+    def checkboxes(cls):
+        # ESL support is provided by a third-party plugin in Oblivion, so do
+        # not make new plugins light by default
+        return {cls.ESL: {**super().checkboxes()[cls.ESL], 'checked': False}}
+
+ObEslPluginFlag._error_msgs = {'ESL': {(_incor, _(
+    "The following plugins have an ESL flag, but do not qualify. Either "
+    "remove the flag with 'Remove ESL Flag', or compact their FormIDs using "
+    "%(xedit_name)s.")): lambda minfo: minfo.formids_out_of_range('ESL')}}
+
 class _SFPluginFlag(_EslMixin, PluginFlag):
     # order matters for UI keys
     ESL = ('esl_flag', '_is_esl', 'l', 4096,
@@ -408,6 +427,9 @@ class GameInfo(object):
     # What mergeability checks to perform for this game. See MergeabilityCheck
     # for more information
     mergeability_checks = {MergeabilityCheck.MERGE: isPBashMergeable}
+    # Whether BP mergeability should still be checked for when the game has
+    # plugin flags (e.g. ESL) - normally the flag checks replace it
+    keep_merge_check = False
     # enum type of supported plugin flags - by default empty
     plugin_flags = PluginFlag
     # enum type of supported master plugin flags
@@ -1019,14 +1041,19 @@ class GameInfo(object):
         """Initialize plugin types for this game. This runs after all game
         directories have been set (see _ASkyrimVRGameInfo override) and
         *after* all overrides."""
-        self.has_esl = '.esl' in self.espm_extensions
-        pflags = pflags or (self.has_esl and EslPluginFlag)
+        pflags = pflags or ('.esl' in self.espm_extensions and EslPluginFlag)
+        # Games can support the ESL flag without the .esl extension (e.g.
+        # Oblivion with the OblivionESL OBSE plugin), so check the flags
+        self.has_esl = bool(pflags) and 'ESL' in pflags.__members__
         def _prod(*its):
             return (s for tup_str in product(*its) if (s := ''.join(tup_str)))
         if pflags:
             self.plugin_flags = pflags
-            self.mergeability_checks = {mc: pflag.can_convert for pflag in
-                pflags if (mc := pflag.merge_check) is not None}
+            self.mergeability_checks = {
+                **(type(self).mergeability_checks if self.keep_merge_check
+                   else {}),
+                **{mc: pflag.can_convert for pflag in pflags if
+                   (mc := pflag.merge_check) is not None}}
             fmt = {'xedit_name': self.Xe.full_name,
                    'game_name': self.display_name}
             pflags.error_msgs = {pf: {(_cf[0] % {'FLAG': pf.name},

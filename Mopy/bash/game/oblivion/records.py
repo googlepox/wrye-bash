@@ -516,6 +516,11 @@ class MreTes4(AMreHeader):
     """TES4 Record.  File header."""
     rec_sig = b'TES4'
 
+    class HeaderFlags(AMreHeader.HeaderFlags):
+        # Not a vanilla flag - read by the OblivionESL OBSE plugin. Same bit
+        # as SSE/FO4, which is also the one xEdit sets
+        esl_flag: bool = flag(9)
+
     melSet = MelSet(
         MelStruct(b'HEDR', ['f', '2I'], ('version', 1.0), 'numRecords',
             ('nextObject', AMreHeader.next_object_default), is_required=True),
